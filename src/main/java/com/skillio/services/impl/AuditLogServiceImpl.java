@@ -5,8 +5,10 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,45 +33,42 @@ public class AuditLogServiceImpl implements AuditLogService {
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
     private final HttpServletRequest httpServletRequest;
+    private final PlatformTransactionManager transactionManager;
 
-    // ==================== CREATE AUDIT LOG ====================
-    
-    /**
-     * ✅ Create audit log in SEPARATE TRANSACTION
-     * This prevents audit log rollback if main transaction fails
-     */
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void createAuditLog(String entityType, Long entityId, String action,
-                              Object oldValue, Object newValue, User performedBy) {
+                               Object oldValue, Object newValue, User performedBy) {
         try {
-            AuditLog auditLog = new AuditLog();
-            auditLog.setEntityType(entityType);
-            auditLog.setEntityId(entityId);
-            auditLog.setAction(action);
-            
-            // Convert objects to JSON strings
-            auditLog.setOldValue(oldValue != null ? convertToJson(oldValue) : null);
-            auditLog.setNewValue(newValue != null ? convertToJson(newValue) : null);
-            
-            auditLog.setPerformedBy(performedBy);
-            auditLog.setIpAddress(getClientIp());
-            auditLog.setUserAgent(httpServletRequest.getHeader("User-Agent"));
-            auditLog.setPerformedAt(LocalDateTime.now());
+            TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+            transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            transactionTemplate.executeWithoutResult(status -> {
+                AuditLog auditLog = new AuditLog();
+                auditLog.setEntityType(entityType);
+                auditLog.setEntityId(entityId);
+                auditLog.setAction(action);
+                auditLog.setOldValue(oldValue != null ? convertToJson(oldValue) : null);
+                auditLog.setNewValue(newValue != null ? convertToJson(newValue) : null);
+                auditLog.setPerformedBy(resolvePerformedBy(performedBy));
+                auditLog.setIpAddress(getClientIp());
+                auditLog.setUserAgent(httpServletRequest.getHeader("User-Agent"));
+                auditLog.setPerformedAt(LocalDateTime.now());
+                auditLogRepository.save(auditLog);
+            });
 
-            auditLogRepository.save(auditLog);
-            
-            log.info("✅ Audit log saved: {} {} on {} ID: {}", 
+            log.info("Audit log saved: {} {} on {} ID: {}",
                     action, entityType, entityType, entityId);
-                    
         } catch (Exception e) {
-            log.error("❌ Failed to create audit log for {} {}: {}", 
-                     entityType, entityId, e.getMessage());
-            // Don't throw - audit failure shouldn't break main operation
+            log.error("Failed to create audit log for {} {}: {}",
+                    entityType, entityId, e.getMessage(), e);
         }
     }
 
-    // ==================== QUERY AUDIT LOGS ====================
+    private User resolvePerformedBy(User performedBy) {
+        if (performedBy == null || performedBy.getUserId() == null) {
+            return null;
+        }
+        return userRepository.findById(performedBy.getUserId()).orElse(null);
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -138,8 +137,6 @@ public class AuditLogServiceImpl implements AuditLogService {
         return mapToResponse(auditLog);
     }
 
-    // ==================== HELPER METHODS ====================
-
     private String convertToJson(Object obj) {
         try {
             return objectMapper.writeValueAsString(obj);
@@ -166,7 +163,6 @@ public class AuditLogServiceImpl implements AuditLogService {
         response.setOldValue(auditLog.getOldValue());
         response.setNewValue(auditLog.getNewValue());
 
-        // User Info
         User performedBy = auditLog.getPerformedBy();
         if (performedBy != null) {
             response.setPerformedByUserId(performedBy.getUserId());

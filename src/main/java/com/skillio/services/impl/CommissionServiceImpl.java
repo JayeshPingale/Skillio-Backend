@@ -343,6 +343,7 @@ public class CommissionServiceImpl implements CommissionService {
         commission.setEligibilityCondition("FULL_PAYMENT_RECEIVED");
 
         Commission saved = commissionRepository.save(commission);
+        createAuditLog("Commission", saved.getCommissionId(), "REQUEST", null, saved, salesExecutive);
 
         // ✅ Attempt number log karo
         long currentAttemptNumber = attemptsUsed + 1;
@@ -374,6 +375,7 @@ public class CommissionServiceImpl implements CommissionService {
     @Transactional
     public CommissionResponse approveOrRejectCommission(ApproveCommissionRequest request, Long adminId) {
         Commission commission = getCommissionEntityById(request.getCommissionId());
+        Commission oldCommission = cloneCommission(commission);
 
         if (!"PENDING_APPROVAL".equals(commission.getStatus())) {
             throw new IllegalStateException("Only PENDING_APPROVAL commissions can be actioned");
@@ -400,7 +402,15 @@ public class CommissionServiceImpl implements CommissionService {
                 payment.setTransactionId(request.getTransactionId());
                 payment.setPaidBy(admin);
                 payment.setRemarks(request.getComments());
-                commissionPaymentRepository.save(payment);
+                CommissionPayment savedPayment = commissionPaymentRepository.save(payment);
+                createAuditLog(
+                    "CommissionPayment",
+                    savedPayment.getCommissionPaymentId(),
+                    "CREATE",
+                    null,
+                    createSafeCommissionPaymentAuditData(savedPayment),
+                    admin
+                );
 
                 commission.setStatus("PAID");
                 commission.setPaidDate(LocalDate.now());
@@ -440,7 +450,7 @@ public class CommissionServiceImpl implements CommissionService {
         }
 
         createAuditLog("Commission", commission.getCommissionId(),
-            request.getApproved() ? "APPROVE" : "REJECT", null, commission, admin);
+            request.getApproved() ? "APPROVE" : "REJECT", oldCommission, commission, admin);
 
         return mapToResponse(commission);
     }
@@ -850,6 +860,19 @@ public class CommissionServiceImpl implements CommissionService {
         return clone;
     }
 
+    private java.util.Map<String, Object> createSafeCommissionPaymentAuditData(CommissionPayment payment) {
+        java.util.Map<String, Object> data = new java.util.HashMap<>();
+        data.put("commissionPaymentId", payment.getCommissionPaymentId());
+        data.put("commissionId", payment.getCommission().getCommissionId());
+        data.put("salesExecutiveId", payment.getCommission().getSalesExecutive().getUserId());
+        data.put("amountPaid", payment.getAmountPaid());
+        data.put("paymentDate", payment.getPaymentDate());
+        data.put("paymentMode", payment.getPaymentMode());
+        data.put("paidByUserId", payment.getPaidBy().getUserId());
+        data.put("remarks", payment.getRemarks());
+        return data;
+    }
+
     private void createAuditLog(String entityType, Long entityId, String action,
                                 Object oldValue, Object newValue, User performedBy) {
         try {
@@ -932,5 +955,3 @@ public class CommissionServiceImpl implements CommissionService {
             || "CANCELLED".equals(status);
     }
 }
-
-

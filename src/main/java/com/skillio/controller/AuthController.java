@@ -13,12 +13,17 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.skillio.dto.ApiResponse;
+import com.skillio.dto.ForgotPasswordRequest;
+import com.skillio.dto.ResetForgotPasswordRequest;
 import com.skillio.dto.UserLoginRequest;
 import com.skillio.dto.UserLoginResponse;
+import com.skillio.dto.VerifyForgotPasswordOtpRequest;
 import com.skillio.entities.User;
 import com.skillio.repositories.UserRepository;
 import com.skillio.security.JwtTokenProvider;
 import com.skillio.security.PermissionNameNormalizer;
+import com.skillio.services.AuthService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +37,7 @@ public class AuthController {
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider jwtTokenProvider;
     private final UserRepository userRepository;
+    private final AuthService authService;
 
     @PostMapping("/login")
     public ResponseEntity<UserLoginResponse> login(@Valid @RequestBody UserLoginRequest loginRequest) {
@@ -67,5 +73,34 @@ public class AuthController {
         );
 
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/forgot-password/request")
+    public ResponseEntity<ApiResponse> requestForgotPasswordOtp(
+            @Valid @RequestBody ForgotPasswordRequest request) {
+        authService.sendForgotPasswordOtp(request.getEmail());
+        return ResponseEntity.ok(new ApiResponse(
+                "If the email is registered, a password reset OTP has been sent.",
+                true
+        ));
+    }
+
+    @PostMapping("/forgot-password/verify-otp")
+    public ResponseEntity<ApiResponse> verifyForgotPasswordOtp(
+            @Valid @RequestBody VerifyForgotPasswordOtpRequest request) {
+        authService.verifyForgotPasswordOtp(request.getEmail(), request.getOtp());
+        return ResponseEntity.ok(new ApiResponse("OTP verified successfully.", true));
+    }
+
+    @PostMapping("/forgot-password/reset")
+    public ResponseEntity<ApiResponse> resetForgotPassword(
+            @Valid @RequestBody ResetForgotPasswordRequest request) {
+        authService.resetPassword(
+                request.getEmail(),
+                request.getOtp(),
+                request.getNewPassword(),
+                request.getConfirmPassword()
+        );
+        return ResponseEntity.ok(new ApiResponse("Password reset successfully.", true));
     }
 }
